@@ -43,11 +43,12 @@ static void *cq_poller(void *arg) {
                 continue;
             }
 
-            //wr.wr_id  -->  wc.wc_id;
+            //wr.wr_id  -->  wc.wr_id;
+            conn_manger_t *conn_manger = (conn_manger_t*)wc.wr_id;
             if (wc.opcode == IBV_WC_RECV) {
-                printf("Received message on connection\n");
+                printf("Received : %s\n", conn_manger->recv_buffer);
             } else if (wc.opcode == IBV_WC_SEND) {
-                printf("Send completed on connection\n");
+                printf("Send : %s\n", conn_manger->send_buffer);
             }
 
         }
