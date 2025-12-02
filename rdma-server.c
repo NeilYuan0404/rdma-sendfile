@@ -28,17 +28,19 @@ static void on_connection_request(struct rdma_cm_id *cm_id) {
 static void on_connect_established(struct rdma_cm_id *cm_id) {
     printf("Connection established with %s\n", get_inet_addr_str(cm_id));
 
-    char rbuffer[BUFFER_SIZE] = {0};
+    conn_manger_t *conn_manger = cm_id->context;
+
+    char *rbuffer = conn_manger->recv_buffer;
 
     struct ibv_sge sge;
     memset(&sge, 0, sizeof(sge));
     sge.addr = (uintptr_t)rbuffer;
     sge.length = BUFFER_SIZE;
-    sge.lkey = 0; // Assume lkey is set appropriately
+    sge.lkey = conn_manger->recv_mr->lkey; // Assume lkey is set appropriately
 
     struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
     memset(&recv_wr, 0, sizeof(recv_wr));
-    recv_wr.wr_id = 2;
+    recv_wr.wr_id = (uintptr_t)conn_manger;
     recv_wr.sg_list = &sge;
     recv_wr.num_sge = 1;    
 

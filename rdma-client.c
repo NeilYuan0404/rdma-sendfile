@@ -11,8 +11,10 @@
 static void on_connect_established(struct rdma_cm_id *cm_id) {
     printf("Connection established with %s\n", get_inet_addr_str(cm_id));
 
-    char sbuffer[BUFFER_SIZE] = {0};
-    char rbuffer[BUFFER_SIZE] = {0};
+    conn_manger_t *conn_manger = (conn_manger_t*)cm_id->context;
+
+    char *sbuffer = conn_manger->send_buffer;
+    char *rbuffer = conn_manger->recv_buffer;
 
     while (1) {
 
@@ -27,11 +29,11 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
         memset(&sge, 0, sizeof(sge));
         sge.addr = (uintptr_t)sbuffer;
         sge.length = BUFFER_SIZE;
-        sge.lkey = 0; // Assume lkey is set appropriately
+        sge.lkey = conn_manger->send_mr->lkey; // Assume lkey is set appropriately
 
         struct ibv_send_wr send_wr, *bad_send_wr = NULL;
         memset(&send_wr, 0, sizeof(send_wr));
-        send_wr.wr_id = 1;
+        send_wr.wr_id = (uintptr_t)conn_manger;
         send_wr.opcode = IBV_WR_SEND;
         send_wr.send_flags = IBV_SEND_SIGNALED;
         send_wr.sg_list = &sge;

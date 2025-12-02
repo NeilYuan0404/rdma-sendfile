@@ -5,12 +5,21 @@
 
 #define BUFFER_SIZE 1024
 
+typedef struct conn_manger {
+    char *recv_buffer;
+    char *send_buffer;
+    struct ibv_mr *recv_mr;
+    struct ibv_mr *send_mr;
+    struct ibv_qp *qp;
+} conn_manger_t;
+
 static char *get_inet_addr_str(struct rdma_cm_id *cm_id) {
     
     struct sockaddr_in *addr_in = (struct sockaddr_in *)rdma_get_peer_addr(cm_id);
     return inet_ntoa(addr_in->sin_addr);
 }
 
+// wc --> 
 static void *cq_poller(void *arg) {
 
     struct ibv_wc wc;
@@ -25,7 +34,7 @@ static void *cq_poller(void *arg) {
         ibv_ack_cq_events(cq, 1);
         printf(" ibv_ack_cq_events\n");
         ibv_req_notify_cq(cq, 0);
-
+        printf(" ibv_req_notify_cq\n");
         while (ibv_poll_cq(cq, 10, &wc)) {
             // Here we would normally handle work completions
             // For brevity, we skip that.
@@ -34,6 +43,7 @@ static void *cq_poller(void *arg) {
                 continue;
             }
 
+            //wr.wr_id  -->  wc.wc_id;
             if (wc.opcode == IBV_WC_RECV) {
                 printf("Received message on connection\n");
             } else if (wc.opcode == IBV_WC_SEND) {
@@ -90,6 +100,17 @@ static void initialize_connection(struct rdma_cm_id *cm_id) {
         perror("rdma_create_qp failed\n");    
         exit(-1);   
     }
+
+    conn_manger_t *conn_manger = (conn_manger_t *)malloc(sizeof(conn_manger_t));
+    //cm->qp = 
+
+    conn_manger->recv_buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
+    conn_manger->send_buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
+
+    conn_manger->recv_mr = ibv_reg_mr(pd, conn_manger->recv_buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    conn_manger->send_mr = ibv_reg_mr(pd, conn_manger->send_buffer, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ);
+
+    cm_id->context = conn_manger;
 
     return ;
 }
