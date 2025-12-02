@@ -14,17 +14,19 @@ static char *get_inet_addr_str(struct rdma_cm_id *cm_id) {
 static void *cq_poller(void *arg) {
 
     struct ibv_wc wc;
-    struct rdma_cm_id *cm_id = (struct rdma_cm_id *)arg;
+    struct ibv_cq *cq;
+    void *ctx = NULL;
+    struct ibv_comp_channel *channel = (struct ibv_comp_channel*)arg;
 
     while (1) {
+        printf("before ibv_get_cq_event\n");
+        ibv_get_cq_event(channel, &cq, &ctx);
+        printf(" ibv_get_cq_event\n");
+        ibv_ack_cq_events(cq, 1);
+        printf(" ibv_ack_cq_events\n");
+        ibv_req_notify_cq(cq, 0);
 
-        ibv_get_cq_event(cm_id->recv_cq->channel, &cm_id->recv_cq, NULL);
-
-        ibv_ack_cq_events(cm_id->recv_cq, 1);
-
-        ibv_req_notify_cq(cm_id->recv_cq, 0);
-
-        while (ibv_poll_cq(cm_id->recv_cq, 10, &wc)) {
+        while (ibv_poll_cq(cq, 10, &wc)) {
             // Here we would normally handle work completions
             // For brevity, we skip that.
             if (wc.status != IBV_WC_SUCCESS) {
@@ -33,9 +35,9 @@ static void *cq_poller(void *arg) {
             }
 
             if (wc.opcode == IBV_WC_RECV) {
-                printf("Received message on connection with %s\n", get_inet_addr_str(cm_id));
+                printf("Received message on connection\n");
             } else if (wc.opcode == IBV_WC_SEND) {
-                printf("Send completed on connection with %s\n", get_inet_addr_str(cm_id));
+                printf("Send completed on connection\n");
             }
 
         }
@@ -71,8 +73,8 @@ static void initialize_connection(struct rdma_cm_id *cm_id) {
         exit(-1);   
     }
 
-    //pthread_t cq_poller_thread;
-    //pthread_create(&cq_poller_thread, NULL, cq_poller, cm_id);
+    pthread_t cq_poller_thread;
+    pthread_create(&cq_poller_thread, NULL, cq_poller, channel);
 
     struct ibv_qp_init_attr qp_attr;
     memset(&qp_attr, 0, sizeof(qp_attr));

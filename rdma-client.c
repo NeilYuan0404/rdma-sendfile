@@ -86,9 +86,7 @@ int main(int argc, char *argv[]) {
 
     struct rdma_cm_event *event;
     while (rdma_get_cm_event(eventchannel, &event) == 0) {
-        // Here we would normally handle events such as RDMA_CM_EVENT_ADDR_RESOLVED
-        // and RDMA_CM_EVENT_ROUTE_RESOLVED, but for brevity, we skip that.
-
+        
         switch (event->event) {
             case RDMA_CM_EVENT_ADDR_RESOLVED:
                 printf("Address resolved.\n");
