@@ -8,6 +8,43 @@
 #include "rdma.h"
 
 
+static void on_completion_client(struct ibv_wc *wc) {
+
+    if (wc->status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc->status));
+        return ;
+    }
+
+    //wr.wr_id  -->  wc.wr_id;
+    conn_manger_t *conn_manger = (conn_manger_t*)wc->wr_id;
+    if (wc->opcode == IBV_WC_RECV) {
+        printf("Received : %s\n", conn_manger->recv_buffer);
+
+    } else if (wc->opcode == IBV_WC_SEND) {
+        printf("Send : %s\n", conn_manger->send_buffer);
+#if 0
+        char *rbuffer = conn_manger->recv_buffer;
+        // Post receive
+        memset(rbuffer, 0, BUFFER_SIZE);
+
+        struct ibv_sge sge;
+        memset(&sge, 0, sizeof(sge));
+        sge.addr = (uintptr_t)rbuffer;
+        sge.length = BUFFER_SIZE;
+        sge.lkey = conn_manger->recv_mr->lkey; // Assume lkey is set appropriately
+
+        struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
+        memset(&recv_wr, 0, sizeof(recv_wr));
+        recv_wr.wr_id = (uintptr_t)conn_manger;
+        recv_wr.sg_list = &sge;
+        recv_wr.num_sge = 1;    
+
+        ibv_post_recv(conn_manger->qp, &recv_wr, &bad_recv_wr);
+#endif
+    }
+
+}
+
 static void on_connect_established(struct rdma_cm_id *cm_id) {
     printf("Connection established with %s\n", get_inet_addr_str(cm_id));
 
@@ -40,21 +77,24 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
         send_wr.num_sge = 1;    
 
         ibv_post_send(cm_id->qp, &send_wr, &bad_send_wr);
+        printf("sendbuffer: %s\n", conn_manger->send_buffer);
 
         // Post receive
+        memset(rbuffer, 0, BUFFER_SIZE);
+
         struct ibv_sge rge;
         memset(&rge, 0, sizeof(rge));
         rge.addr = (uintptr_t)rbuffer;
         rge.length = BUFFER_SIZE;
-        rge.lkey = 0; // Assume lkey is set appropriately   
+        rge.lkey = conn_manger->recv_mr->lkey; // Assume lkey is set appropriately
 
         struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
         memset(&recv_wr, 0, sizeof(recv_wr));
-        recv_wr.wr_id = 2;
+        recv_wr.wr_id = (uintptr_t)conn_manger;
         recv_wr.sg_list = &rge;
-        recv_wr.num_sge = 1;
+        recv_wr.num_sge = 1;    
 
-        ibv_post_recv(cm_id->qp, &recv_wr, &bad_recv_wr);
+        ibv_post_recv(conn_manger->qp, &recv_wr, &bad_recv_wr);
 
     }
 }
@@ -101,7 +141,7 @@ int main(int argc, char *argv[]) {
             case RDMA_CM_EVENT_ROUTE_RESOLVED:
                 printf("Route resolved.\n");
 
-                initialize_connection(cm_id);
+                initialize_connection(cm_id, on_completion_client);
                 // Now we can connect
                 if (0 != rdma_connect(cm_id, NULL)) {
                     perror("rdma_connect failed\n");

@@ -12,9 +12,48 @@
 // ibverbs 
 // rdmacm
 
+static void on_completion_server(struct ibv_wc *wc) {
+
+    if (wc->status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc->status));
+        return ;
+    }
+
+    //wr.wr_id  -->  wc.wr_id;
+    conn_manger_t *conn_manger = (conn_manger_t*)wc->wr_id;
+    if (wc->opcode == IBV_WC_RECV) {
+        printf("Received : %s\n", conn_manger->recv_buffer);
+
+        memcpy(conn_manger->send_buffer, conn_manger->recv_buffer, BUFFER_SIZE);
+
+        char *sbuffer = conn_manger->send_buffer;
+
+        struct ibv_sge sge;
+        memset(&sge, 0, sizeof(sge));
+        sge.addr = (uintptr_t)sbuffer;
+        sge.length = BUFFER_SIZE;
+        sge.lkey = conn_manger->send_mr->lkey; // Assume lkey is set appropriately
+
+        struct ibv_send_wr send_wr, *bad_send_wr = NULL;
+        memset(&send_wr, 0, sizeof(send_wr));
+        send_wr.wr_id = (uintptr_t)conn_manger;
+        send_wr.opcode = IBV_WR_SEND;
+        send_wr.send_flags = IBV_SEND_SIGNALED;
+        send_wr.sg_list = &sge;
+        send_wr.num_sge = 1;    
+
+        ibv_post_send(conn_manger->qp, &send_wr, &bad_send_wr);
+
+    } else if (wc->opcode == IBV_WC_SEND) {
+        printf("Send : %s\n", conn_manger->send_buffer);
+    }
+
+}
+
+
 static void on_connection_request(struct rdma_cm_id *cm_id) {
     printf("Connection request from %s\n", get_inet_addr_str(cm_id));
-    initialize_connection(cm_id);
+    initialize_connection(cm_id, on_completion_server);
 
     struct rdma_conn_param conn_param;
     memset(&conn_param, 0, sizeof(conn_param));
@@ -46,6 +85,25 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
 
     ibv_post_recv(cm_id->qp, &recv_wr, &bad_recv_wr);
 
+    // 
+#if 0
+    char *sbuffer = conn_manger->send_buffer;
+    sprintf(sbuffer, "hello1234567890");
+    memset(&sge, 0, sizeof(sge));
+    sge.addr = (uintptr_t)sbuffer;
+    sge.length = BUFFER_SIZE;
+    sge.lkey = conn_manger->send_mr->lkey; // Assume lkey is set appropriately
+
+    struct ibv_send_wr send_wr, *bad_send_wr = NULL;
+    memset(&send_wr, 0, sizeof(send_wr));
+    send_wr.wr_id = (uintptr_t)conn_manger;
+    send_wr.opcode = IBV_WR_SEND;
+    send_wr.send_flags = IBV_SEND_SIGNALED;
+    send_wr.sg_list = &sge;
+    send_wr.num_sge = 1;    
+
+    ibv_post_send(cm_id->qp, &send_wr, &bad_send_wr);
+#endif
 }
 
 // cm --> connection manager

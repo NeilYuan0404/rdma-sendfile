@@ -13,6 +13,13 @@ typedef struct conn_manger {
     struct ibv_qp *qp;
 } conn_manger_t;
 
+typedef void (*on_completion_t)(struct ibv_wc *wc);
+
+typedef struct cq_params {
+    struct ibv_comp_channel *channel;
+    on_completion_t on_complete;
+} cq_params_t;
+
 static char *get_inet_addr_str(struct rdma_cm_id *cm_id) {
     
     struct sockaddr_in *addr_in = (struct sockaddr_in *)rdma_get_peer_addr(cm_id);
@@ -25,31 +32,21 @@ static void *cq_poller(void *arg) {
     struct ibv_wc wc;
     struct ibv_cq *cq;
     void *ctx = NULL;
-    struct ibv_comp_channel *channel = (struct ibv_comp_channel*)arg;
+    cq_params_t *params = (cq_params_t*)arg;
+    struct ibv_comp_channel *channel = params->channel;
+    on_completion_t on_complete = params->on_complete;
 
     while (1) {
-        printf("before ibv_get_cq_event\n");
         ibv_get_cq_event(channel, &cq, &ctx);
-        printf(" ibv_get_cq_event\n");
         ibv_ack_cq_events(cq, 1);
-        printf(" ibv_ack_cq_events\n");
         ibv_req_notify_cq(cq, 0);
-        printf(" ibv_req_notify_cq\n");
+
+        printf("ibv_poll_cq\n");
         while (ibv_poll_cq(cq, 10, &wc)) {
             // Here we would normally handle work completions
             // For brevity, we skip that.
-            if (wc.status != IBV_WC_SUCCESS) {
-                fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc.status));
-                continue;
-            }
 
-            //wr.wr_id  -->  wc.wr_id;
-            conn_manger_t *conn_manger = (conn_manger_t*)wc.wr_id;
-            if (wc.opcode == IBV_WC_RECV) {
-                printf("Received : %s\n", conn_manger->recv_buffer);
-            } else if (wc.opcode == IBV_WC_SEND) {
-                printf("Send : %s\n", conn_manger->send_buffer);
-            }
+            on_complete(&wc);
 
         }
 
@@ -57,7 +54,7 @@ static void *cq_poller(void *arg) {
 
 }
 
-static void initialize_connection(struct rdma_cm_id *cm_id) {
+static void initialize_connection(struct rdma_cm_id *cm_id, on_completion_t on_complete) {
     // Placeholder for connection initialization logic
     printf("Initializing connection for %s\n", get_inet_addr_str(cm_id));
 
@@ -84,8 +81,13 @@ static void initialize_connection(struct rdma_cm_id *cm_id) {
         exit(-1);   
     }
 
+    cq_params_t params = {
+        .channel = channel,
+        .on_complete = on_complete
+    };
+
     pthread_t cq_poller_thread;
-    pthread_create(&cq_poller_thread, NULL, cq_poller, channel);
+    pthread_create(&cq_poller_thread, NULL, cq_poller, &params);
 
     struct ibv_qp_init_attr qp_attr;
     memset(&qp_attr, 0, sizeof(qp_attr));
@@ -103,7 +105,7 @@ static void initialize_connection(struct rdma_cm_id *cm_id) {
     }
 
     conn_manger_t *conn_manger = (conn_manger_t *)malloc(sizeof(conn_manger_t));
-    //cm->qp = 
+    conn_manger->qp = cm_id->qp;
 
     conn_manger->recv_buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
     conn_manger->send_buffer = (char *)malloc(BUFFER_SIZE * sizeof(char));
