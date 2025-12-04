@@ -18,7 +18,7 @@ static int disconnected = 0;
 static void on_completion_server(struct ibv_wc *wc) {
 
     if (wc->status != IBV_WC_SUCCESS) {
-        if (disconnected && wc->status == IBV_WC_WR_FLUSH_ERR) {
+        if (disconnected) {
             printf("Client disconnected.\n");
         } else {
             fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc->status));
@@ -34,44 +34,13 @@ static void on_completion_server(struct ibv_wc *wc) {
 
         memcpy(conn_manger->send_buffer, conn_manger->recv_buffer, BUFFER_SIZE);
 
-        char *sbuffer = conn_manger->send_buffer;
-
-        struct ibv_sge sge;
-        memset(&sge, 0, sizeof(sge));
-        sge.addr = (uintptr_t)sbuffer;
-        sge.length = BUFFER_SIZE;
-        sge.lkey = conn_manger->send_mr->lkey; // Assume lkey is set appropriately
-
-        struct ibv_send_wr send_wr, *bad_send_wr = NULL;
-        memset(&send_wr, 0, sizeof(send_wr));
-        send_wr.wr_id = (uintptr_t)conn_manger;
-        send_wr.opcode = IBV_WR_SEND;
-        send_wr.send_flags = IBV_SEND_SIGNALED;
-        send_wr.sg_list = &sge;
-        send_wr.num_sge = 1;    
-
-        ibv_post_send(conn_manger->qp, &send_wr, &bad_send_wr);
+        post_send(conn_manger);
 
     } else if (wc->opcode == IBV_WC_SEND) {
         printf("Send : %s\n", conn_manger->send_buffer); //
 
-        // 
-        char *rbuffer = conn_manger->recv_buffer;
-        memset(rbuffer, 0, BUFFER_SIZE);
+        post_recv(conn_manger);
 
-        struct ibv_sge sge;
-        memset(&sge, 0, sizeof(sge));
-        sge.addr = (uintptr_t)rbuffer;
-        sge.length = BUFFER_SIZE;
-        sge.lkey = conn_manger->recv_mr->lkey; // Assume lkey is set appropriately
-
-        struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
-        memset(&recv_wr, 0, sizeof(recv_wr));
-        recv_wr.wr_id = (uintptr_t)conn_manger;
-        recv_wr.sg_list = &sge;
-        recv_wr.num_sge = 1;    
-
-        ibv_post_recv(conn_manger->qp, &recv_wr, &bad_recv_wr);
     }
 
 }
@@ -93,41 +62,8 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
 
     conn_manger_t *conn_manger = cm_id->context;
 
-    char *rbuffer = conn_manger->recv_buffer;
+    post_recv(conn_manger);
 
-    struct ibv_sge sge;
-    memset(&sge, 0, sizeof(sge));
-    sge.addr = (uintptr_t)rbuffer;
-    sge.length = BUFFER_SIZE;
-    sge.lkey = conn_manger->recv_mr->lkey; // Assume lkey is set appropriately
-
-    struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
-    memset(&recv_wr, 0, sizeof(recv_wr));
-    recv_wr.wr_id = (uintptr_t)conn_manger;
-    recv_wr.sg_list = &sge;
-    recv_wr.num_sge = 1;    
-
-    ibv_post_recv(cm_id->qp, &recv_wr, &bad_recv_wr);
-
-    // 
-#if 0
-    char *sbuffer = conn_manger->send_buffer;
-    sprintf(sbuffer, "hello1234567890");
-    memset(&sge, 0, sizeof(sge));
-    sge.addr = (uintptr_t)sbuffer;
-    sge.length = BUFFER_SIZE;
-    sge.lkey = conn_manger->send_mr->lkey; // Assume lkey is set appropriately
-
-    struct ibv_send_wr send_wr, *bad_send_wr = NULL;
-    memset(&send_wr, 0, sizeof(send_wr));
-    send_wr.wr_id = (uintptr_t)conn_manger;
-    send_wr.opcode = IBV_WR_SEND;
-    send_wr.send_flags = IBV_SEND_SIGNALED;
-    send_wr.sg_list = &sge;
-    send_wr.num_sge = 1;    
-
-    ibv_post_send(cm_id->qp, &send_wr, &bad_send_wr);
-#endif
 }
 
 // cm --> connection manager

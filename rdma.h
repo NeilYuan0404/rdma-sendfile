@@ -132,6 +132,51 @@ static void initialize_connection(struct rdma_cm_id *cm_id, on_completion_t on_c
     return ;
 }
 
+// copy data to conn_manager->send_buffer
+static void post_send(conn_manger_t *conn_manger) {
+
+    char *sbuffer = conn_manger->send_buffer;
+
+    struct ibv_sge sge;
+    memset(&sge, 0, sizeof(sge));
+    sge.addr = (uintptr_t)sbuffer;
+    sge.length = BUFFER_SIZE;
+    sge.lkey = conn_manger->send_mr->lkey; // Assume lkey is set appropriately
+
+    struct ibv_send_wr send_wr, *bad_send_wr = NULL;
+    memset(&send_wr, 0, sizeof(send_wr));
+    send_wr.wr_id = (uintptr_t)conn_manger;
+    send_wr.opcode = IBV_WR_SEND;
+    send_wr.send_flags = IBV_SEND_SIGNALED;
+    send_wr.sg_list = &sge;
+    send_wr.num_sge = 1;    
+
+    ibv_post_send(conn_manger->qp, &send_wr, &bad_send_wr);
+
+}
+
+// copy data from conn_manager->recv_buffer
+static void post_recv(conn_manger_t *conn_manger) {
+
+    char *rbuffer = conn_manger->recv_buffer;
+    memset(rbuffer, 0, BUFFER_SIZE);
+
+    struct ibv_sge sge;
+    memset(&sge, 0, sizeof(sge));
+    sge.addr = (uintptr_t)rbuffer;
+    sge.length = BUFFER_SIZE;
+    sge.lkey = conn_manger->recv_mr->lkey; // Assume lkey is set appropriately
+
+    struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
+    memset(&recv_wr, 0, sizeof(recv_wr));
+    recv_wr.wr_id = (uintptr_t)conn_manger;
+    recv_wr.sg_list = &sge;
+    recv_wr.num_sge = 1;    
+
+    ibv_post_recv(conn_manger->qp, &recv_wr, &bad_recv_wr);
+
+}
+
 
 #endif
 
