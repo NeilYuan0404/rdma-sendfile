@@ -57,7 +57,7 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
     size_t file_size = st.st_size;
     size_t idx = 0, count = 0;
 
-
+    printf("enter loop\n");
     while (1) {
 
         memset(sbuffer, 0, BUFFER_SIZE);
@@ -72,9 +72,9 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
         }
         int ret = read(fd, sbuffer, BUFFER_SIZE);
         idx += ret;
-        printf("idx: %ld\n", idx);
+        printf("idx: %ld", idx);
 
-        getchar();
+        //getchar();
 
 #elif 0
         sprintf(sbuffer, "abcdefghijklmnopqrstuvwxyz");

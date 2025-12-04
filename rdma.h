@@ -3,7 +3,7 @@
 #ifndef __RDMA_H__
 #define __RDMA_H__
 
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE  (64 * 1024 * 1024)
 
 typedef struct conn_manger {
     char *recv_buffer;
