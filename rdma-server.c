@@ -7,6 +7,10 @@
 #include <arpa/inet.h>
 #include <rdma/rdma_cma.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
 #include "rdma.h"
 
 // ibverbs 
@@ -14,6 +18,20 @@
 // other thread
 
 static int disconnected = 0;
+
+int image_fd = 0;
+int write_file(const char *filename, char *data, int length) {
+
+    if (image_fd == 0) {
+        image_fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0776);
+        if (image_fd <= 0) {
+            printf("open failed : %s\n", filename);
+            exit(1);
+        }
+    }
+
+    return write(image_fd, data, length);
+}
 
 static void on_completion_server(struct ibv_wc *wc) {
 
@@ -30,16 +48,18 @@ static void on_completion_server(struct ibv_wc *wc) {
     //wr.wr_id  -->  wc.wr_id;
     conn_manger_t *conn_manger = (conn_manger_t*)wc->wr_id;
     if (wc->opcode == IBV_WC_RECV) {
-        printf("Received : %s\n", conn_manger->recv_buffer);
-
+        //printf("Received : %s\n", conn_manger->recv_buffer);
+        write_file("output.mp4", conn_manger->recv_buffer, BUFFER_SIZE);
+#if 0
         memcpy(conn_manger->send_buffer, conn_manger->recv_buffer, BUFFER_SIZE);
-
         post_send(conn_manger);
-
+#else 
+        post_recv(conn_manger);
+#endif 
     } else if (wc->opcode == IBV_WC_SEND) {
         printf("Send : %s\n", conn_manger->send_buffer); //
 
-        post_recv(conn_manger);
+        //post_recv(conn_manger);
 
     }
 

@@ -84,7 +84,7 @@ static void initialize_connection(struct rdma_cm_id *cm_id, on_completion_t on_c
         exit(-1);   
     }
 
-    struct ibv_cq *cq = ibv_create_cq(cm_id->verbs, 10, NULL, channel, 0);
+    struct ibv_cq *cq = ibv_create_cq(cm_id->verbs, 1024, NULL, channel, 0);
     if (!cq) {
         perror("ibv_create_cq failed\n");    
         exit(-1);   
@@ -108,8 +108,8 @@ static void initialize_connection(struct rdma_cm_id *cm_id, on_completion_t on_c
     qp_attr.send_cq = cq;
     qp_attr.recv_cq = cq;
     qp_attr.qp_type = IBV_QPT_RC;
-    qp_attr.cap.max_send_wr = 10;
-    qp_attr.cap.max_recv_wr = 10;
+    qp_attr.cap.max_send_wr = 1024;
+    qp_attr.cap.max_recv_wr = 1024;
     qp_attr.cap.max_send_sge = 1;
     qp_attr.cap.max_recv_sge = 1;
 

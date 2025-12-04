@@ -4,8 +4,14 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <rdma/rdma_cma.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include "rdma.h"
+
+
+#define FILENAME        "meeting_01.mp4"
 
 static int disconnected = 0;
 
@@ -27,10 +33,9 @@ static void on_completion_client(struct ibv_wc *wc) {
         printf("Received : %s\n", conn_manger->recv_buffer);
 
     } else if (wc->opcode == IBV_WC_SEND) {
-        printf("Send : %s\n", conn_manger->send_buffer);
+        //printf("Send : %s\n", conn_manger->send_buffer);
 
     }
-
 }
 
 static void on_connect_established(struct rdma_cm_id *cm_id) {
@@ -41,20 +46,51 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
     char *sbuffer = conn_manger->send_buffer;
     char *rbuffer = conn_manger->recv_buffer;
 
+    int fd = open(FILENAME, O_RDONLY);
+    if (fd <= 0) return ;
+
+    struct stat st;
+    if (-1 == fstat(fd, &st)) {
+        close(fd);
+        return ;
+    }
+    size_t file_size = st.st_size;
+    size_t idx = 0, count = 0;
+
+
     while (1) {
 
         memset(sbuffer, 0, BUFFER_SIZE);
+#if 1
+        if (idx + BUFFER_SIZE <= file_size) {
+            count = BUFFER_SIZE;
+        } else if (idx < file_size) {
+            count = file_size - idx;
+        } else {
+            close(fd);
+            break;
+        }
+        int ret = read(fd, sbuffer, BUFFER_SIZE);
+        idx += ret;
+        printf("idx: %ld\n", idx);
 
+        getchar();
+
+#elif 0
+        sprintf(sbuffer, "abcdefghijklmnopqrstuvwxyz");
+        getchar();
+#else 
         printf(">>>>> ");
         scanf("%s", sbuffer);
         printf("\n");
-
+#endif
         post_send(conn_manger);
 
         // Post receive
+#if 0        
         memset(rbuffer, 0, BUFFER_SIZE);
         post_recv(conn_manger);
-
+#endif
 
     }
 }
