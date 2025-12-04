@@ -12,10 +12,18 @@
 // ibverbs 
 // rdmacm
 // other thread
+
+static int disconnected = 0;
+
 static void on_completion_server(struct ibv_wc *wc) {
 
     if (wc->status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc->status));
+        if (disconnected && wc->status == IBV_WC_WR_FLUSH_ERR) {
+            printf("Client disconnected.\n");
+        } else {
+            fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc->status));
+        }
+        
         return ;
     }
 
@@ -70,7 +78,6 @@ static void on_completion_server(struct ibv_wc *wc) {
 
 
 static void on_connection_request(struct rdma_cm_id *cm_id) {
-    printf("Connection request from %s\n", get_inet_addr_str(cm_id));
     initialize_connection(cm_id, on_completion_server);
 
     struct rdma_conn_param conn_param;
@@ -83,7 +90,6 @@ static void on_connection_request(struct rdma_cm_id *cm_id) {
 }
 
 static void on_connect_established(struct rdma_cm_id *cm_id) {
-    printf("Connection established with %s\n", get_inet_addr_str(cm_id));
 
     conn_manger_t *conn_manger = cm_id->context;
 
@@ -161,13 +167,12 @@ int main(int argc, char *argv[]) {
     while (0 == rdma_get_cm_event(eventchannel, &event)) {
 
         if (event->event == RDMA_CM_EVENT_CONNECT_REQUEST) {
-            printf("Received connection request.\n");
             on_connection_request(event->id);
         } else if (event->event == RDMA_CM_EVENT_ESTABLISHED) {
-            printf("Connection established.\n");
             on_connect_established(event->id);
         } else if (event->event == RDMA_CM_EVENT_DISCONNECTED) {
-            printf("Client disconnected.\n");
+            disconnected = 1;
+            destory_connection(event->id);
         }
 
 

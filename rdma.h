@@ -41,7 +41,6 @@ static void *cq_poller(void *arg) {
         ibv_ack_cq_events(cq, 1);
         ibv_req_notify_cq(cq, 0);
 
-        printf("ibv_poll_cq\n");
         while (ibv_poll_cq(cq, 10, &wc)) {
             // Here we would normally handle work completions
             // For brevity, we skip that.
@@ -54,10 +53,25 @@ static void *cq_poller(void *arg) {
 
 }
 
+static void destory_connection(struct rdma_cm_id *cm_id) {
+
+    conn_manger_t *conn_manger = (conn_manger_t *)cm_id->context;
+
+    rdma_destroy_qp(cm_id);
+
+    ibv_dereg_mr(conn_manger->recv_mr);
+    ibv_dereg_mr(conn_manger->send_mr);
+
+    free(conn_manger->recv_buffer);
+    free(conn_manger->send_buffer);
+
+    rdma_destroy_id(cm_id);
+    free(conn_manger);
+
+}
+
 static void initialize_connection(struct rdma_cm_id *cm_id, on_completion_t on_complete) {
     // Placeholder for connection initialization logic
-    printf("Initializing connection for %s\n", get_inet_addr_str(cm_id));
-
     struct ibv_pd *pd = ibv_alloc_pd(cm_id->verbs);
     if (!pd) {
         perror("ibv_alloc_pd failed\n");    

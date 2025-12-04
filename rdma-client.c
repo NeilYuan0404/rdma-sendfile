@@ -7,11 +7,17 @@
 
 #include "rdma.h"
 
+static int disconnected = 0;
 
 static void on_completion_client(struct ibv_wc *wc) {
 
     if (wc->status != IBV_WC_SUCCESS) {
-        fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc->status));
+        if (disconnected && wc->status == IBV_WC_WR_FLUSH_ERR) {
+            printf("Disconnected from server.\n");
+        } else {
+            fprintf(stderr, "Work completion error: %s\n", ibv_wc_status_str(wc->status));
+        }
+        
         return ;
     }
 
@@ -131,7 +137,6 @@ int main(int argc, char *argv[]) {
         
         switch (event->event) {
             case RDMA_CM_EVENT_ADDR_RESOLVED:
-                printf("Address resolved.\n");
                 // Proceed to resolve route
                 if (0 != rdma_resolve_route(cm_id, 2000)) {
                     perror("rdma_resolve_route failed\n");
@@ -139,7 +144,6 @@ int main(int argc, char *argv[]) {
                 }
                 break;
             case RDMA_CM_EVENT_ROUTE_RESOLVED:
-                printf("Route resolved.\n");
 
                 initialize_connection(cm_id, on_completion_client);
                 // Now we can connect
@@ -149,11 +153,11 @@ int main(int argc, char *argv[]) {
                 }
                 break;
             case RDMA_CM_EVENT_ESTABLISHED:
-                printf("Connection established.\n");
                 on_connect_established(event->id);
                 break;
             case RDMA_CM_EVENT_DISCONNECTED:
-                printf("Disconnected from server.\n");
+                disconnected = 1;
+                destory_connection(event->id);
                 break;
             default:
                 printf("Unhandled event: %d\n", event->event);
