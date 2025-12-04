@@ -11,7 +11,7 @@
 
 // ibverbs 
 // rdmacm
-
+// other thread
 static void on_completion_server(struct ibv_wc *wc) {
 
     if (wc->status != IBV_WC_SUCCESS) {
@@ -45,7 +45,25 @@ static void on_completion_server(struct ibv_wc *wc) {
         ibv_post_send(conn_manger->qp, &send_wr, &bad_send_wr);
 
     } else if (wc->opcode == IBV_WC_SEND) {
-        printf("Send : %s\n", conn_manger->send_buffer);
+        printf("Send : %s\n", conn_manger->send_buffer); //
+
+        // 
+        char *rbuffer = conn_manger->recv_buffer;
+        memset(rbuffer, 0, BUFFER_SIZE);
+
+        struct ibv_sge sge;
+        memset(&sge, 0, sizeof(sge));
+        sge.addr = (uintptr_t)rbuffer;
+        sge.length = BUFFER_SIZE;
+        sge.lkey = conn_manger->recv_mr->lkey; // Assume lkey is set appropriately
+
+        struct ibv_recv_wr recv_wr, *bad_recv_wr = NULL;
+        memset(&recv_wr, 0, sizeof(recv_wr));
+        recv_wr.wr_id = (uintptr_t)conn_manger;
+        recv_wr.sg_list = &sge;
+        recv_wr.num_sge = 1;    
+
+        ibv_post_recv(conn_manger->qp, &recv_wr, &bad_recv_wr);
     }
 
 }
