@@ -13,3 +13,7 @@ core.*
 *.bin
 *.out
 output.*
+
+# python
+__pycache__/
+*.pyc

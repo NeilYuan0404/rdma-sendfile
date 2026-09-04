@@ -1,5 +1,5 @@
 /*
- * 发送端：读 meeting_01.mp4，按 BUFFER_SIZE 切块 IBV_WR_SEND。
+ * 发送端：按 BUFFER_SIZE 切块 IBV_WR_SEND。
  * 每块等对端 1 字节 ACK 再发下一块；传完 rdma_disconnect，用断连当 EOF。
  */
 #define _GNU_SOURCE
@@ -14,9 +14,8 @@
 
 #include "rdma.h"
 
-#define FILENAME        "meeting_01.mp4"
-
 static int disconnected = 0;
+static const char *g_filename;
 
 /* CQ 线程回调。真正叫醒业务线程的是 cq_poller 里对 send/recv_outstanding 的清零。 */
 static void on_completion_client(struct ibv_wc *wc) {
@@ -44,9 +43,9 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
     conn_manger_t *conn_manger = (conn_manger_t *)cm_id->context;
     char *sbuffer = conn_manger->send_buffer;
 
-    int fd = open(FILENAME, O_RDONLY);
+    int fd = open(g_filename, O_RDONLY);
     if (fd < 0) {
-        perror("open " FILENAME);
+        perror(g_filename);
         rdma_disconnect(cm_id);
         return;
     }
@@ -61,7 +60,7 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
     size_t file_size = (size_t)st.st_size;
     size_t idx = 0;
 
-    printf("Sending %s (%zu bytes)\n", FILENAME, file_size);
+    printf("Sending %s (%zu bytes)\n", g_filename, file_size);
     fflush(stdout);
 
     /* 先挂 recv 再发数据，才能接到服务端的 ACK。 */
@@ -117,10 +116,11 @@ static void *client_send_thread(void *arg) {
 
 int main(int argc, char *argv[]) {
 
-    if (argc != 3) {
-        printf("Usage: %s <server_ip> <server_port>\n", argv[0]);
+    if (argc != 4) {
+        printf("Usage: %s <server_ip> <server_port> <infile>\n", argv[0]);
         return -1;
     }
+    g_filename = argv[3];
 
     struct rdma_event_channel *eventchannel = rdma_create_event_channel();
     struct rdma_cm_id *cm_id;

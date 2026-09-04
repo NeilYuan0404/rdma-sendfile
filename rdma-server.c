@@ -1,5 +1,5 @@
 /*
- * 接收端：listen 后按块 RECV，写入 output.mp4，再回 1 字节 ACK。
+ * 接收端：listen 后按块 RECV，写入命令行指定的文件，再回 1 字节 ACK。
  * 先写盘、再 post_recv、再 ACK，保证客户端下一包到达时 recv WQE 已挂好。
  */
 #define _GNU_SOURCE
@@ -16,6 +16,7 @@
 #include "rdma.h"
 
 static int disconnected = 0;
+static const char *g_outfile;
 
 int image_fd = -1;
 static size_t bytes_written = 0;
@@ -80,7 +81,7 @@ static void on_completion_server(struct ibv_wc *wc) {
             clock_gettime(CLOCK_MONOTONIC, &xfer_t0);
             xfer_started = 1;
         }
-        write_file("output.mp4", conn_manger->recv_buffer,
+        write_file(g_outfile, conn_manger->recv_buffer,
                    wc->byte_len > BUFFER_SIZE ? BUFFER_SIZE : (int)wc->byte_len);
         /* 先挂下一 recv 再 ACK，避免客户端马上发下一块时 RNR。 */
         post_recv(conn_manger);
@@ -116,10 +117,11 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
 
 int main(int argc, char *argv[]) {
 
-    if (argc != 3) {
-        printf("Usage: %s <server_ip> <server_port>\n", argv[0]);
+    if (argc != 4) {
+        printf("Usage: %s <server_ip> <server_port> <outfile>\n", argv[0]);
         return -1;
     }
+    g_outfile = argv[3];
 
     struct rdma_event_channel *eventchannel = rdma_create_event_channel();
     struct rdma_cm_id *cm_id;
@@ -172,7 +174,7 @@ int main(int argc, char *argv[]) {
                 clock_gettime(CLOCK_MONOTONIC, &t1);
                 print_throughput("receiver", bytes_written, &xfer_t0, &t1);
             }
-            printf("Client disconnected, wrote %zu bytes to output.mp4\n", bytes_written);
+            printf("Client disconnected, wrote %zu bytes to %s\n", bytes_written, g_outfile);
             fflush(stdout);
             xfer_started = 0;
             bytes_written = 0;
