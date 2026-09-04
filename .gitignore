@@ -1,3 +1,15 @@
+# compiled binaries
 rdma-client
 rdma-server
+*.o
+*.a
+*.so
+a.out
+core
+core.*
+
+# transfer payloads / dumps
 *.mp4
+*.bin
+*.out
+output.*

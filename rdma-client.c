@@ -71,6 +71,9 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
         return;
     }
 
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
     /* 单飞：SEND 数据 → 等 ACK → 再挂下一次 recv。siw 上不能连续 SEND 不等人。 */
     while (idx < file_size) {
         size_t remain = file_size - idx;
@@ -96,6 +99,9 @@ static void on_connect_established(struct rdma_cm_id *cm_id) {
         if (idx < file_size && post_recv(conn_manger) != 0)
             break;
     }
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    print_throughput("sender", idx, &t0, &t1);
 
     close(fd);
     /* 没有单独的结束报文，对端把 DISCONNECTED 当作文件收完。 */

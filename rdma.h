@@ -19,11 +19,30 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <time.h>
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 
 #define BUFFER_SIZE  (64 * 1024)
 #define CONN_MAGIC   0x52444d41u  /* 校验 wr_id 是否仍指向有效 conn */
+
+static double timespec_to_sec(const struct timespec *t) {
+    return (double)t->tv_sec + (double)t->tv_nsec / 1e9;
+}
+
+/* 不含建连，只统计 payload 字节 / 墙钟时间。 */
+static void print_throughput(const char *side, size_t bytes,
+                             const struct timespec *t0,
+                             const struct timespec *t1) {
+    double sec = timespec_to_sec(t1) - timespec_to_sec(t0);
+    if (sec < 1e-9)
+        sec = 1e-9;
+    double mib = (double)bytes / (1024.0 * 1024.0);
+    double mib_s = mib / sec;
+    printf("%s: %zu bytes in %.4f s, %.2f MiB/s (%.2f Mbit/s)\n",
+           side, bytes, sec, mib_s, mib_s * 8.0);
+    fflush(stdout);
+}
 
 typedef struct conn_manger {
     uint32_t magic;

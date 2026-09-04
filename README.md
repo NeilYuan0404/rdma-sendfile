@@ -29,3 +29,5 @@ $ ./rdma-client 192.168.8.146 2000
 ```
 
 Client sends the file with `IBV_WR_SEND`. Server writes `output.mp4`. Each chunk is ACKed before the next send so Soft-iWARP does not drop the connection.
+
+Both sides print elapsed time and throughput (MiB/s) for the payload, excluding connection setup.

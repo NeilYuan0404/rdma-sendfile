@@ -19,6 +19,8 @@ static int disconnected = 0;
 
 int image_fd = -1;
 static size_t bytes_written = 0;
+static int xfer_started = 0;
+static struct timespec xfer_t0;
 
 static int write_file(const char *filename, char *data, int length) {
     if (image_fd < 0) {
@@ -64,10 +66,20 @@ static void on_completion_server(struct ibv_wc *wc) {
                 image_fd = -1;
             }
             printf("Transfer complete, wrote %zu bytes\n", bytes_written);
+            if (xfer_started) {
+                struct timespec t1;
+                clock_gettime(CLOCK_MONOTONIC, &t1);
+                print_throughput("receiver", bytes_written, &xfer_t0, &t1);
+                xfer_started = 0;
+            }
             fflush(stdout);
             return;
         }
         /* 按本块实际到达长度写，不是固定 BUFFER_SIZE。 */
+        if (!xfer_started) {
+            clock_gettime(CLOCK_MONOTONIC, &xfer_t0);
+            xfer_started = 1;
+        }
         write_file("output.mp4", conn_manger->recv_buffer,
                    wc->byte_len > BUFFER_SIZE ? BUFFER_SIZE : (int)wc->byte_len);
         /* 先挂下一 recv 再 ACK，避免客户端马上发下一块时 RNR。 */
@@ -155,8 +167,15 @@ int main(int argc, char *argv[]) {
                 image_fd = -1;
             }
             destory_connection(id);
+            if (xfer_started) {
+                struct timespec t1;
+                clock_gettime(CLOCK_MONOTONIC, &t1);
+                print_throughput("receiver", bytes_written, &xfer_t0, &t1);
+            }
             printf("Client disconnected, wrote %zu bytes to output.mp4\n", bytes_written);
             fflush(stdout);
+            xfer_started = 0;
+            bytes_written = 0;
         } else {
             printf("Unhandled event: %s\n", rdma_event_str(ev));
         }
