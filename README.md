@@ -1,6 +1,8 @@
 # Rdma
 
-SEND/RECV file transfer over `rdma_cm` + `ibverbs` (Soft-iWARP `siw` or a real RNIC).
+约定：**server 发送，client 接收。**
+
+控制面双边 SEND/RECV（`ready` / `size` / `rkey` / `done` / `ack`），两端先 `post_recv` 再 SEND，用 WC 推进。数据面 RDMA WRITE。server 先把文件读进源 MR，再 WRITE；client 热路径不写盘，`done` 之后再一次性落盘。
 
 ## setup
 ```
@@ -9,36 +11,39 @@ $ sudo rdma link add siw0 type siw netdev eth1
 $ ibv_devices
 ```
 
-Bind to the IP of the netdev that `siw` is attached to, not `127.0.0.1`.
+Bind to the IP of the netdev that `siw` is attached to, not `127.0.0.1`。
 
 ## compile
 ```
-$ gcc -o rdma-client rdma-client.c -libverbs -lrdmacm -lpthread
 $ gcc -o rdma-server rdma-server.c -libverbs -lrdmacm -lpthread
+$ gcc -o rdma-client rdma-client.c -libverbs -lrdmacm -lpthread
 ```
 
 ## run
+先起发送端，再连接收端：
+
 ```
-# server
-$ ./rdma-server 192.168.8.146 2000 output.mp4
+# server：监听，发送 infile
+$ ./rdma-server 192.168.8.146 2000 meeting_01.mp4
 
-# client
-$ ./rdma-client 192.168.8.146 2000 meeting_01.mp4
+# client：连接，写入 outfile
+$ ./rdma-client 192.168.8.146 2000 output.mp4
 ```
 
-Client sends the file with `IBV_WR_SEND`. Server writes the path given on the command line. Each chunk is ACKed before the next send so Soft-iWARP does not drop the connection.
+打印两行吞吐（均不含建连）：
 
-Both sides print elapsed time and throughput (MiB/s) for the payload, excluding connection setup.
+- `network`：已注册内存上的 WRITE（不含预读）
+- `server` / `client`：含等 ACK 或最后一次落盘
+
+公平对比看 **`client` vs `tcp-client`**（都含落盘）。同一文件可用 `cmp` 校验。
 
 ## TCP sendfile 对比
-用 Linux `os.sendfile` 走普通 TCP（零拷贝发送，接收端仍是 `recv`+`write`）。端口不要和 RDMA 冲突。
+同样是 server 发送、client 接收。端口不要和 RDMA 冲突。
 
 ```
-# receiver
-$ python3 sendfile_bench.py recv 192.168.8.146 2001 output.sendfile
+# server
+$ python3 sendfile_bench.py server 192.168.8.146 2001 meeting_01.mp4
 
-# sender
-$ python3 sendfile_bench.py send 192.168.8.146 2001 meeting_01.mp4
+# client
+$ python3 sendfile_bench.py client 192.168.8.146 2001 output.sendfile
 ```
-
-吞吐打印格式与 RDMA 相同（bytes / s / MiB/s / Mbit/s），计时同样不含建连。

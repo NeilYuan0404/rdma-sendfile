@@ -1,6 +1,7 @@
 /*
- * 接收端：listen 后按块 RECV，写入命令行指定的文件，再回 1 字节 ACK。
- * 先写盘、再 post_recv、再 ACK，保证客户端下一包到达时 recv WQE 已挂好。
+ * server：监听并发送文件。控制面线性 5 步：
+ * post_recv → 等 READY → 发 SIZE → 等 RKEY → WRITE → 发 DONE → 等 ACK。
+ * 数据面 RDMA WRITE 泵（窗口 WR_WINDOW，块 CHUNK_SIZE）。
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -8,7 +9,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <rdma/rdma_cma.h>
-
+#include <pthread.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -16,91 +17,136 @@
 #include "rdma.h"
 
 static int disconnected = 0;
-static const char *g_outfile;
+static const char *g_infile;
 
-int image_fd = -1;
-static size_t bytes_written = 0;
-static int xfer_started = 0;
-static struct timespec xfer_t0;
-
-static int write_file(const char *filename, char *data, int length) {
-    if (image_fd < 0) {
-        image_fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0666);
-        if (image_fd < 0) {
-            printf("open failed : %s\n", filename);
-            exit(1);
-        }
-    }
-
-    /* write() 可能短写，必须循环直到 length 字节都落盘。 */
-    int off = 0;
+static int read_all(int fd, char *buf, size_t length) {
+    size_t off = 0;
     while (off < length) {
-        ssize_t n = write(image_fd, data + off, length - off);
-        if (n < 0) {
-            perror("write");
+        ssize_t n = read(fd, buf + off, length - off);
+        if (n <= 0) {
+            perror("read");
             return -1;
         }
-        off += n;
+        off += (size_t)n;
     }
-    bytes_written += (size_t)length;
-    return length;
+    return 0;
 }
 
-static void on_completion_server(struct ibv_wc *wc) {
+static void send_file(struct rdma_cm_id *cm_id) {
+    printf("Connection established with %s\n", get_inet_addr_str(cm_id));
+    fflush(stdout);
 
-    if (wc->status != IBV_WC_SUCCESS) {
-        /* destroy_qp 会把未完成的 recv flush 掉，断连时是正常现象。 */
-        if (disconnected || wc->status == IBV_WC_WR_FLUSH_ERR)
-            return;
-        fprintf(stderr, "Work completion error: %s (opcode=%d byte_len=%u)\n",
-                ibv_wc_status_str(wc->status), wc->opcode, wc->byte_len);
+    conn_manger_t *conn = (conn_manger_t *)cm_id->context;
+
+    if (post_recv(conn) != 0) {
+        rdma_disconnect(cm_id);
         return;
     }
 
-    conn_manger_t *conn_manger = (conn_manger_t *)wc->wr_id;
-    if (wc->opcode == IBV_WC_RECV) {
-        if (wc->wc_flags & IBV_WC_WITH_IMM) {
-            /* 预留：带 immediate 的结束标记。当前客户端用断连当 EOF，不会走到这里。 */
-            if (image_fd >= 0) {
-                fsync(image_fd);
-                close(image_fd);
-                image_fd = -1;
-            }
-            printf("Transfer complete, wrote %zu bytes\n", bytes_written);
-            if (xfer_started) {
-                struct timespec t1;
-                clock_gettime(CLOCK_MONOTONIC, &t1);
-                print_throughput("receiver", bytes_written, &xfer_t0, &t1);
-                xfer_started = 0;
-            }
-            fflush(stdout);
-            return;
-        }
-        /* 按本块实际到达长度写，不是固定 BUFFER_SIZE。 */
-        if (!xfer_started) {
-            clock_gettime(CLOCK_MONOTONIC, &xfer_t0);
-            xfer_started = 1;
-        }
-        write_file(g_outfile, conn_manger->recv_buffer,
-                   wc->byte_len > BUFFER_SIZE ? BUFFER_SIZE : (int)wc->byte_len);
-        /* 先挂下一 recv 再 ACK，避免客户端马上发下一块时 RNR。 */
-        post_recv(conn_manger);
-        conn_manger->send_buffer[0] = 1;
-        post_send_nowait(conn_manger, 1);
-    } else if (wc->opcode == IBV_WC_SEND) {
-        /* ACK 的 SEND 完成，无需再处理 */
+    int fd = open(g_infile, O_RDONLY);
+    if (fd < 0) {
+        perror(g_infile);
+        rdma_disconnect(cm_id);
+        return;
     }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        perror("fstat");
+        close(fd);
+        rdma_disconnect(cm_id);
+        return;
+    }
+    size_t file_size = (size_t)st.st_size;
+    if (file_size == 0) {
+        fprintf(stderr, "empty file\n");
+        close(fd);
+        rdma_disconnect(cm_id);
+        return;
+    }
+
+    if (alloc_src_mr(conn, file_size) != 0 ||
+        read_all(fd, conn->src_buf, file_size) != 0) {
+        close(fd);
+        rdma_disconnect(cm_id);
+        return;
+    }
+    close(fd);
+
+    printf("Sending %s (%zu bytes) via RDMA WRITE chunk=%d window=%d\n",
+           g_infile, file_size, CHUNK_SIZE, WR_WINDOW);
+    fflush(stdout);
+
+    if (expect_ctrl(conn, CTRL_READY, NULL) != 0) {
+        rdma_disconnect(cm_id);
+        return;
+    }
+
+    if (post_recv(conn) != 0) {
+        rdma_disconnect(cm_id);
+        return;
+    }
+    fill_ctrl(conn->send_buffer, CTRL_SIZE, 0, 0, file_size);
+    if (post_send(conn, sizeof(ctrl_msg_t)) != 0) {
+        rdma_disconnect(cm_id);
+        return;
+    }
+
+    ctrl_msg_t rkey_msg;
+    if (expect_ctrl(conn, CTRL_RKEY, &rkey_msg) != 0) {
+        rdma_disconnect(cm_id);
+        return;
+    }
+    conn->remote_addr = rkey_msg.addr;
+    conn->remote_rkey = rkey_msg.rkey;
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    if (post_rdma_file(conn) != 0) {
+        rdma_disconnect(cm_id);
+        return;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    print_throughput("network", file_size, &t0, &t1);
+
+    if (post_recv(conn) != 0) {
+        rdma_disconnect(cm_id);
+        return;
+    }
+    fill_ctrl(conn->send_buffer, CTRL_DONE, 0, 0, file_size);
+    if (post_send(conn, sizeof(ctrl_msg_t)) != 0) {
+        rdma_disconnect(cm_id);
+        return;
+    }
+    if (expect_ctrl(conn, CTRL_ACK, NULL) != 0) {
+        rdma_disconnect(cm_id);
+        return;
+    }
+
+    struct timespec t2;
+    clock_gettime(CLOCK_MONOTONIC, &t2);
+    print_throughput("server", file_size, &t0, &t2);
+
+    printf("Transfer finished, disconnecting\n");
+    rdma_disconnect(cm_id);
+}
+
+static void *server_send_thread(void *arg) {
+    send_file((struct rdma_cm_id *)arg);
+    return NULL;
 }
 
 static void on_connection_request(struct rdma_cm_id *cm_id) {
-    initialize_connection(cm_id, on_completion_server);
+    initialize_connection(cm_id);
 
     struct rdma_conn_param conn_param;
     memset(&conn_param, 0, sizeof(conn_param));
-    conn_param.responder_resources = 1;
-    conn_param.initiator_depth = 1;
+    conn_param.responder_resources = 128;
+    conn_param.initiator_depth = 128;
     conn_param.retry_count = 7;
-    conn_param.rnr_retry_count = 7;  /* 配合 ACK 乒乓；siw 不能单靠这个扛 RNR */
+    conn_param.rnr_retry_count = 7;
 
     if (rdma_accept(cm_id, &conn_param)) {
         perror("rdma_accept");
@@ -108,20 +154,13 @@ static void on_connection_request(struct rdma_cm_id *cm_id) {
     }
 }
 
-static void on_connect_established(struct rdma_cm_id *cm_id) {
-    printf("Connection established with %s\n", get_inet_addr_str(cm_id));
-    fflush(stdout);
-    /* QP 进入 RTS 后再 post_recv。siw 在 RTS 之前挂的 recv 可能被 flush。 */
-    post_recv((conn_manger_t *)cm_id->context);
-}
-
 int main(int argc, char *argv[]) {
 
     if (argc != 4) {
-        printf("Usage: %s <server_ip> <server_port> <outfile>\n", argv[0]);
+        printf("Usage: %s <bind_ip> <port> <infile>\n", argv[0]);
         return -1;
     }
-    g_outfile = argv[3];
+    g_infile = argv[3];
 
     struct rdma_event_channel *eventchannel = rdma_create_event_channel();
     struct rdma_cm_id *cm_id;
@@ -131,13 +170,13 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(atoi(argv[2]));
-    server_addr.sin_addr.s_addr = inet_addr(argv[1]);
+    struct sockaddr_in bind_addr;
+    memset(&bind_addr, 0, sizeof(bind_addr));
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_port = htons(atoi(argv[2]));
+    bind_addr.sin_addr.s_addr = inet_addr(argv[1]);
 
-    if (rdma_bind_addr(cm_id, (struct sockaddr *)&server_addr)) {
+    if (rdma_bind_addr(cm_id, (struct sockaddr *)&bind_addr)) {
         perror("rdma_bind_addr");
         return -1;
     }
@@ -147,7 +186,7 @@ int main(int argc, char *argv[]) {
         return -1;
     }
 
-    printf("Listening on %s:%s\n", argv[1], argv[2]);
+    printf("Listening on %s:%s, sending %s\n", argv[1], argv[2], g_infile);
     fflush(stdout);
 
     struct rdma_cm_event *event;
@@ -159,25 +198,14 @@ int main(int argc, char *argv[]) {
         if (ev == RDMA_CM_EVENT_CONNECT_REQUEST) {
             on_connection_request(id);
         } else if (ev == RDMA_CM_EVENT_ESTABLISHED) {
-            on_connect_established(id);
+            pthread_t th;
+            pthread_create(&th, NULL, server_send_thread, id);
+            pthread_detach(th);
         } else if (ev == RDMA_CM_EVENT_DISCONNECTED) {
             disconnected = 1;
-            /* 客户端 disconnect 即 EOF，把已写入的文件刷盘。 */
-            if (image_fd >= 0) {
-                fsync(image_fd);
-                close(image_fd);
-                image_fd = -1;
-            }
             destory_connection(id);
-            if (xfer_started) {
-                struct timespec t1;
-                clock_gettime(CLOCK_MONOTONIC, &t1);
-                print_throughput("receiver", bytes_written, &xfer_t0, &t1);
-            }
-            printf("Client disconnected, wrote %zu bytes to %s\n", bytes_written, g_outfile);
+            printf("Client disconnected.\n");
             fflush(stdout);
-            xfer_started = 0;
-            bytes_written = 0;
         } else {
             printf("Unhandled event: %s\n", rdma_event_str(ev));
         }
